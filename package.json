@@ -1,0 +1,31 @@
+{
+  "name": "agent-ship-fast",
+  "version": "0.1.0",
+  "description": "Ship a SaaS on Stripe in minutes, driven by your AI agent — products, prices, checkout links, customer portal, coupons, webhooks. Pure CLI, no embedded LLM (postiz model).",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "shipfast": "./cli.mjs"
+  },
+  "files": [
+    "cli.mjs",
+    "SKILL.md",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "stripe",
+    "saas",
+    "cli",
+    "ai-agent",
+    "claude-code",
+    "payment-links",
+    "ship-fast"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lgdlcs/agent-ship-fast.git"
+  }
+}
