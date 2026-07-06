@@ -29,6 +29,25 @@ const say = (s) => process.stderr.write(s + "\n");
 const out = (obj) => process.stdout.write(JSON.stringify(obj, null, 2) + "\n");
 const die = (msg) => { say(`✗ ${msg}`); process.exit(1); };
 
+// ---- pixel-art banner (stderr only; never stdout, so JSON/pipes stay clean) ----
+const BANNER_LINES = [
+  "█▀▀▀ █  █ ▀█▀ █▀▀█ █▀▀▀ ▄▀▀▄ █▀▀▀ ▀▀█▀▀",
+  "█▄▄▄ █▄▄█  █  █▄▄█ █▄▄▄ █▄▄█ █▄▄▄   █",
+  "   █ █  █  █  █    █    █  █    █   █",
+  "▀▀▀▀ ▀  ▀ ▀▀▀ ▀    ▀    ▀  ▀ ▀▀▀▀   ▀",
+];
+const BANNER_TAGLINE = "ship your SaaS fast ⚡";
+function banner() {
+  const color = Boolean(process.stderr.isTTY) && !process.env.NO_COLOR;
+  const shades = [27, 33, 39, 45]; // 256-color blue → cyan gradient
+  const width = Math.max(...BANNER_LINES.map((l) => [...l].length));
+  const pad = Math.max(0, Math.floor((width - [...BANNER_TAGLINE].length) / 2));
+  const tag = " ".repeat(pad) + BANNER_TAGLINE;
+  const lines = BANNER_LINES.map((l, i) => (color ? `\x1b[38;5;${shades[i]}m${l}\x1b[0m` : l));
+  lines.push(color ? `\x1b[2m${tag}\x1b[0m` : tag);
+  say("\n" + lines.join("\n") + "\n");
+}
+
 // ---- run the official stripe CLI, parse JSON ----
 function stripe(args) {
   return new Promise((resolve, reject) => {
@@ -173,6 +192,50 @@ ${cardsHtml}
 
 // ---- commands ----
 const commands = {
+  // ----- onboarding diagnostic (never exits non-zero — it's a health check) -----
+  init: async () => {
+    banner();
+    let stripe_cli = false, stripe_version = null;
+    try {
+      const v = await stripe(["version"]);
+      stripe_version = String(v).trim().split("\n")[0].replace(/^stripe\s+version\s+/i, "").trim() || String(v).trim();
+      stripe_cli = true;
+      say(`✓ stripe CLI ${stripe_version}`);
+    } catch {
+      say("✗ stripe CLI not found");
+      say("  → install: https://docs.stripe.com/stripe-cli  (brew install stripe/stripe-cli/stripe, or a GitHub release)");
+    }
+
+    let connected = false, mode = null, products = null;
+    try {
+      const probe = await stripe(["products", "list", "--limit", "1"]);
+      connected = true;
+      products = probe.data?.length ?? 0;
+      const first = probe.data?.[0];
+      if (first && typeof first.livemode === "boolean") mode = first.livemode ? "live" : "test";
+      else mode = (CLI_ENV.STRIPE_API_KEY || "").startsWith("sk_live") ? "live" : "test";
+      say(`✓ connected to Stripe (${mode} mode)`);
+    } catch {
+      say("✗ not connected");
+      say("  → run `shipfast login`, or set STRIPE_API_KEY=sk_test_… in .env");
+    }
+
+    const next = [];
+    if (!connected) next.push("shipfast login");
+    else if (products === 0) {
+      next.push('shipfast sell --name "My Ebook" --price 29');
+      next.push('shipfast launch --name "MyApp" --plan "Pro:29"');
+    } else {
+      next.push("shipfast page");
+      next.push("shipfast list products");
+    }
+    say("");
+    say("Next steps:");
+    next.forEach((n) => say(`  → ${n}`));
+
+    out({ stripe_cli, stripe_version, connected, mode, products, next });
+  },
+
   // ----- auth (postiz-style) -----
   "auth:login": async () => {
     say("🔐 Opening browser pairing with `stripe login`…");
@@ -185,7 +248,7 @@ const commands = {
   },
 
   "auth:status": async () => {
-    const probe = await stripe(["products", "list", "--limit", "1"]).catch((e) => { die(`not connected — run \`shipfast auth:login\` (${e.message})`); });
+    const probe = await stripe(["products", "list", "--limit", "1"]).catch((e) => { die(`not connected — run \`shipfast login\` (${e.message})`); });
     let account = null;
     try { account = await stripe(["accounts", "retrieve"]); } catch { /* restricted/sandbox keys can't read the account */ }
     say("✅ Connected to Stripe (test mode).");
@@ -208,7 +271,7 @@ const commands = {
     const name = flags.name;
     const planSpecs = list(flags.plan);
     if (!name || planSpecs.length === 0) {
-      die('usage: shipfast saas:init --name "MyApp" --plan "Starter:9" [--plan "Pro:29"] [--yearly] [--trial 14] [--currency eur]');
+      die('usage: shipfast launch --name "MyApp" --plan "Starter:9" [--plan "Pro:29"] [--yearly] [--trial 14] [--currency eur]');
     }
     const currency = (flags.currency || "eur").toLowerCase();
     const trial = flags.trial ? Number(flags.trial) : 0;
@@ -257,9 +320,9 @@ const commands = {
       customer_portal: portal,
       test_checkout: "Pay any payment_link with card 4242 4242 4242 4242, any future date, any CVC.",
       next_steps: [
-        `shipfast page:generate --name "${name}" (generate a ready-to-deploy pricing page)`,
-        "shipfast webhooks:create --url https://yourapp.com/api/stripe (prod) or webhooks:listen --forward localhost:3000/api/stripe (dev)",
-        "shipfast coupons:create --percent 20 --code LAUNCH20 (optional launch promo)",
+        `shipfast page --name "${name}" (generate a ready-to-deploy pricing page)`,
+        "shipfast hook --url https://yourapp.com/api/stripe (prod) or shipfast listen --forward localhost:3000/api/stripe (dev)",
+        "shipfast promo --percent 20 --code LAUNCH20 (optional launch promo)",
         "Claim/upgrade your Stripe account, then switch to live keys when ready.",
       ],
     });
@@ -351,7 +414,7 @@ const commands = {
       const recent = await stripe(["products", "list", "--limit", "1", "-d", "active=true"]);
       products = recent.data || [];
     }
-    if (!products.length) die("no product found — pass --product prod_… or --name, or create one with saas:init / sell");
+    if (!products.length) die("no product found — pass --product prod_… or --name, or create one with launch / sell");
 
     // ---- payment links (fetched once, matched by first line-item price) ----
     const linksResp = await stripe(["payment_links", "list", "--limit", "100", "-d", "expand[]=data.line_items"]);
@@ -370,7 +433,7 @@ const commands = {
       }
       if (prices.length) collected.push({ product: p.id, name: p.name, image: p.images?.[0] || null, description: p.description || null, prices });
     }
-    if (!collected.length) die("no usable (price + payment link) found — create links with saas:init or sell");
+    if (!collected.length) die("no usable (price + payment link) found — create links with launch or sell");
 
     const isProduct = collected.length === 1 && collected[0].prices.length === 1 && collected[0].prices[0].interval === "one_time";
     const mode = isProduct ? "product" : "pricing";
@@ -420,7 +483,7 @@ const commands = {
   // ----- promos -----
   // coupons:create --percent 20 [--code LAUNCH20] [--duration once|forever|repeating] [--months 3]
   "coupons:create": async () => {
-    if (!flags.percent && !flags.amount) die("usage: shipfast coupons:create --percent 20 [--code LAUNCH20] [--duration once]");
+    if (!flags.percent && !flags.amount) die("usage: shipfast promo --percent 20 [--code LAUNCH20] [--duration once]");
     const args = ["coupons", "create", "-d", `duration=${flags.duration || "once"}`];
     if (flags.percent) args.push("-d", `percent_off=${flags.percent}`);
     if (flags.amount) args.push("-d", `amount_off=${Math.round(parseFloat(flags.amount) * 100)}`, "-d", `currency=${(flags.currency || "eur").toLowerCase()}`);
@@ -437,7 +500,7 @@ const commands = {
   // ----- webhooks -----
   DEFAULT_EVENTS: null,
   "webhooks:create": async () => {
-    if (!flags.url) die("usage: shipfast webhooks:create --url https://yourapp.com/api/stripe [--events a,b,c]");
+    if (!flags.url) die("usage: shipfast hook --url https://yourapp.com/api/stripe [--events a,b,c]");
     const events = (flags.events ? String(flags.events).split(",") : [
       "checkout.session.completed",
       "customer.subscription.created",
@@ -454,7 +517,7 @@ const commands = {
 
   // webhooks:listen --forward localhost:3000/api/stripe  (local dev, blocks)
   "webhooks:listen": async () => {
-    if (!flags.forward) die("usage: shipfast webhooks:listen --forward localhost:3000/api/stripe");
+    if (!flags.forward) die("usage: shipfast listen --forward localhost:3000/api/stripe");
     say(`🪝 Forwarding Stripe events to ${flags.forward} (Ctrl+C to stop)…`);
     spawn("stripe", ["listen", "--forward-to", String(flags.forward)], { stdio: "inherit", env: CLI_ENV });
   },
@@ -476,39 +539,52 @@ const commands = {
     note: "Any future expiry, any CVC, any postal code. Test mode only.",
   }),
 
-  help: async () => {
-    say(`agent-ship-fast — ship your SaaS on Stripe, agent-friendly (postiz model)
-
-Auth:
-  auth:login                       Connect via browser (stripe login pairing)
-  auth:status                      Check connection (live API round-trip)
-  auth:logout                      Remove stripe CLI credentials
-
-Launch:
-  saas:init --name "MyApp" --plan "Starter:9" --plan "Pro:29" [--yearly] [--trial 14] [--currency eur]
-                                   Products + monthly/yearly prices + payment links + customer portal
-  portal:setup [--headline "…"]    Self-serve customer portal (cancel, card, invoices) + login URL
-  coupons:create --percent 20 [--code LAUNCH20] [--duration once|forever|repeating]
-  webhooks:create --url https://…  Webhook endpoint (returns signing secret)
-  webhooks:listen --forward localhost:3000/api/stripe   Local dev forwarding
-
-Sell & pages:
-  sell --name "Mon Ebook" --price 29 [--interval month|year] [--trial 14] [--description "…"] [--image https://…] [--currency eur]
-                                   One product + price (one-time or subscription) + payment link
-  page:generate [--product prod_… | --name "MyApp"] [--out page.html] [--headline "…"] [--features "A|B|C"] [--cta "Buy now"] [--lang en|fr]
-                                   Self-contained product/pricing page wired to your payment links
-
-Inspect:
-  products:list | prices:list | links:list | customers:list | subscriptions:list | balance
-  cards                            Test card numbers
-
-JSON on stdout, human messages on stderr.`);
-  },
+  help: async () => { banner(); say(HELP_TEXT); },
 };
 delete commands.DEFAULT_EVENTS;
 
-const fn = commands[command || "help"];
-if (!fn) { say(`✗ unknown command: ${command}`); await commands.help(); process.exit(1); }
+const HELP_TEXT = `Get started:
+  init                             Diagnose setup (stripe CLI, auth, mode) + next steps
+  login                            Connect via browser (stripe login pairing)
+  status                           Check connection (live API round-trip)
+
+Sell:
+  sell --name "Mon Ebook" --price 29   [--interval month|year] [--trial 14] [--image https://…]
+  launch --name "MyApp" --plan "Starter:9" --plan "Pro:29"   [--yearly] [--trial 14]
+  page [--name "MyApp" | --product prod_…]   [--out page.html] [--features "A|B|C"] [--lang en|fr]
+
+Grow:
+  promo --percent 20 [--code LAUNCH20] [--duration once|forever|repeating]
+  portal [--headline "…"]          Self-serve customer portal (cancel, card, invoices)
+  hook --url https://yourapp.com/api/stripe [--events a,b,c]
+  listen --forward localhost:3000/api/stripe
+
+Inspect:
+  list products|prices|links|customers|subscriptions
+  balance                          Available + pending funds
+  cards                            Test card numbers
+
+Long forms still work (auth:login, saas:init, page:generate, …). JSON on stdout, human messages on stderr.`;
+
+// ---- short verbs → canonical command keys (resolved before lookup) ----
+const ALIASES = {
+  login: "auth:login", status: "auth:status", logout: "auth:logout",
+  launch: "saas:init", page: "page:generate", promo: "coupons:create",
+  portal: "portal:setup", hook: "webhooks:create", listen: "webhooks:listen",
+};
+
+let cmd = command || "help";
+if (cmd === "list") {
+  const what = positional[0];
+  const known = { products: 1, prices: 1, links: 1, customers: 1, subscriptions: 1 };
+  if (!what || !known[what]) die("usage: shipfast list products|prices|links|customers|subscriptions");
+  cmd = `${what}:list`;
+} else if (ALIASES[cmd]) {
+  cmd = ALIASES[cmd];
+}
+
+const fn = commands[cmd];
+if (!fn) { banner(); say(`✗ unknown command: ${command}`); say(HELP_TEXT); process.exit(1); }
 try {
   await fn();
 } catch (err) {
