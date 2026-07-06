@@ -61,12 +61,36 @@ shipfast cards        # test card numbers for a manual checkout
 
 ---
 
+## Sell a product in 2 commands
+
+Not every founder is shipping a multi-plan SaaS. Selling one thing — an ebook, a template, a lifetime deal, or a single subscription — takes two commands: create the product, then generate a page for it.
+
+```bash
+# 1. Sell anything in one call — no --interval = one-shot payment; --interval month|year = subscription
+shipfast sell --name "My Ebook" --price 29 --description "150 pages of Stripe wisdom"
+
+# 2. Generate a standalone HTML page wired to the real payment link
+shipfast page:generate --out page.html
+
+# 3. Deploy the page wherever the founder wants — this is the agent's job, not the CLI's:
+#    GitHub Pages:      cp page.html docs/index.html && git add docs && git commit -m "landing" && git push
+#    Cloudflare Pages:  wrangler pages deploy . --project-name my-ebook
+```
+
+`sell` returns JSON: `{product, price, mode: "one_time"|"subscription", interval, trial_days, amount, currency, payment_link, test_checkout}`. For a subscription with a free trial: `shipfast sell --name "Pro" --price 19 --interval month --trial 14`.
+
+`page:generate` writes a **self-contained** HTML file (zero dependencies, inline CSS, responsive, basic og/twitter SEO) branched onto the real payment links — a product page with a CTA for a one-shot product, or pricing cards with a monthly/yearly toggle for a multi-plan SaaS (`--name "MyApp"` picks up the "MyApp Starter"/"MyApp Pro" products from `saas:init`; no flag → the last product created). Because it's self-contained, you can open it locally to test it (`open page.html`) before deploying. Output JSON: `{file, products, deploy_hint}`.
+
+---
+
 ## Command Reference
 
 | Command | What it does |
 |---|---|
 | `auth:login` / `auth:status` / `auth:logout` | Connect / verify (live API round-trip) / disconnect |
 | `saas:init --name X --plan "Name:price" [--plan …] [--yearly] [--trial N] [--currency eur]` | Full SaaS setup in one call |
+| `sell --name X --price 29 [--interval month\|year] [--trial N] [--description "…"] [--image https://…] [--currency eur]` | Sell one thing: product + price + payment link. No `--interval` = one-shot; with `--interval` = subscription |
+| `page:generate [--product prod_xxx] [--name "MyApp"] [--out page.html] [--headline "…"] [--features "A\|B\|C"] [--cta "Buy now"] [--lang en\|fr]` | Self-contained HTML product/pricing page wired to real payment links |
 | `portal:setup [--headline "…"]` | Self-serve customer portal (cancel, update card, invoices) + no-code login URL |
 | `coupons:create --percent 20 [--code X] [--duration once\|forever\|repeating] [--months 3]` | Coupon (+ customer-facing promotion code) |
 | `webhooks:create --url X [--events a,b]` | Webhook endpoint; defaults to the 5 events a SaaS needs; returns `signing_secret` |
