@@ -11,6 +11,7 @@ A pure CLI (no embedded LLM, no API key to buy) built on the [postiz-agent](http
 - 🚪 Self-serve customer portal (cancel, update card, invoices)
 - 🏷️ Coupons + promotion codes
 - 🪝 Webhooks (prod endpoints + local dev forwarding)
+- 📣 Distribution registry — your agent scouts communities at human scale, you post (no Reddit API, no bots)
 
 ## Quick start
 
@@ -72,6 +73,29 @@ shipfast page --out page.html
 
 `page.html` is self-contained (inline CSS, zero deps) and wired to the real payment link — open it locally to test, then deploy it wherever you like (GitHub Pages, Cloudflare Pages…). Deploying is the agent's job, not the CLI's.
 
+## Distribute
+
+**Monetization gets you paid. Distribution gets you found.** Your agent scouts Reddit & communities at human scale, drafts value-first replies, you post — no Reddit API, no spam bots. The CLI becomes a **local distribution registry** (`distribution.json` in your product folder, versionable in your repo): no network calls, just a place to track opportunities and launches.
+
+```bash
+# 1. Set the product profile once
+shipfast target --name "MyApp" --url https://myapp.com --keywords "invoicing|freelance|stripe" --audience "solo founders"
+
+# 2. Your agent finds a recent conversation your product genuinely helps, and logs it
+shipfast found --url https://reddit.com/r/SaaS/comments/abc --title "How do you handle invoicing?" --channel reddit
+
+# 3. Review what's queued — the agent drafts a value-first reply with `Why:` and `Success =`
+shipfast opps --status new
+
+# 4. YOU post the reply yourself, then record it
+shipfast replied 1 --link https://reddit.com/r/SaaS/comments/abc/xyz
+
+# 5. Weekly stats
+shipfast report
+```
+
+The quality bar is strict on purpose: 2–3 opportunities a day, every reply useful even without mentioning the product, the founder always clicks publish. For directory launches, `shipfast plan` ships a checklist of 14 embedded directories (Product Hunt, Show HN, DevHunt, Peerlist…) — pick the 3–4 that fit, submit them by hand, and check them off with `plan --done`.
+
 ## Use it with an AI agent
 
 Tell your agent (e.g. Claude Code):
@@ -95,6 +119,15 @@ promo --percent 20 [--code LAUNCH20] [--duration once|forever|repeating]   (= co
 hook --url https://… | listen --forward localhost:3000/api/stripe   (= webhooks:create | webhooks:listen)
 list products | list prices | list links | list customers | list subscriptions   (= products:list | …)
 balance | cards  # account balance | test card numbers
+
+# Distribute (local registry — no network, no Reddit API)
+target --name "MyApp" --url https://myapp.com [--keywords "a|b|c"] [--audience "…"]   # profile + launch checklist init
+found --url <thread> --title "…" --channel reddit [--note "…"]   # log a reply opportunity (dedupes by URL)
+opps [--status new|replied|skipped]                              # list opportunities
+replied <id> --link <permalink> | skip <id> [--reason "…"]       # after you post / when you pass
+plan [--done <slug> --url <submission>]                          # 14-directory launch checklist
+link --channel <slug> [--to <url>]                               # product URL with UTM tags
+report                                                           # distribution registry stats
 ```
 
 Full agent documentation (rules, workflow, pitfalls): [`SKILL.md`](./SKILL.md).

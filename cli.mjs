@@ -190,6 +190,40 @@ ${cardsHtml}
 </html>`;
 }
 
+// ---- distribution registry (local persistent state in CWD, zero network) ----
+const DIST_PATH = path.join(process.cwd(), "distribution.json");
+const DIRECTORIES = [
+  { slug: "producthunt", name: "Product Hunt", submit: "https://www.producthunt.com/posts/new", pricing: "free", dofollow: false },
+  { slug: "smollaunch", name: "SmolLaunch", submit: "https://smollaunch.com/submit", pricing: "free", dofollow: true },
+  { slug: "launchingnext", name: "Launching Next", submit: "https://www.launchingnext.com/submit/", pricing: "freemium", dofollow: true },
+  { slug: "devhunt", name: "DevHunt", submit: "https://devhunt.org/", pricing: "free", dofollow: true },
+  { slug: "uneed", name: "Uneed", submit: "https://www.uneed.best/submit-a-tool", pricing: "freemium", dofollow: true },
+  { slug: "peerlist", name: "Peerlist", submit: "https://peerlist.io/launchpad", pricing: "free", dofollow: true },
+  { slug: "betalist", name: "BetaList", submit: "https://betalist.com/submit", pricing: "freemium", dofollow: false },
+  { slug: "microlaunch", name: "MicroLaunch", submit: "https://microlaunch.net/", pricing: "freemium", dofollow: true },
+  { slug: "fazier", name: "Fazier", submit: "https://fazier.com/submit", pricing: "freemium", dofollow: true },
+  { slug: "saashub", name: "SaaSHub", submit: "https://www.saashub.com/submit-service", pricing: "freemium", dofollow: false },
+  { slug: "alternativeto", name: "AlternativeTo", submit: "https://alternativeto.net/manage-item/", pricing: "free", dofollow: false },
+  { slug: "indiehackers", name: "Indie Hackers", submit: "https://www.indiehackers.com/products", pricing: "free", dofollow: false },
+  { slug: "showhn", name: "Show HN", submit: "https://news.ycombinator.com/submit", pricing: "free", dofollow: false },
+  { slug: "toolfolio", name: "Toolfolio", submit: "https://toolfolio.io/submit", pricing: "freemium", dofollow: true },
+];
+
+const slugify = (s) => String(s ?? "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+const normUrl = (u) => {
+  let s = String(u ?? "").trim();
+  const h = s.indexOf("#"); if (h >= 0) s = s.slice(0, h);
+  const q = s.indexOf("?"); if (q >= 0) s = s.slice(0, q);
+  return s.replace(/\/+$/, "").toLowerCase();
+};
+const distHint = "run `shipfast target --name … --url …` first";
+function loadDist() {
+  if (!fs.existsSync(DIST_PATH)) die(`no distribution.json here — ${distHint}`);
+  try { return JSON.parse(fs.readFileSync(DIST_PATH, "utf8")); }
+  catch { die(`distribution.json is invalid JSON — ${distHint}`); }
+}
+const saveDist = (d) => fs.writeFileSync(DIST_PATH, JSON.stringify(d, null, 2) + "\n");
+
 // ---- commands ----
 const commands = {
   // ----- onboarding diagnostic (never exits non-zero — it's a health check) -----
@@ -539,6 +573,158 @@ const commands = {
     note: "Any future expiry, any CVC, any postal code. Test mode only.",
   }),
 
+  // ----- distribution registry (local, no network) -----
+  // target --name "MyApp" --url https://… [--keywords "a|b|c"] [--audience "…"]  |  no flags → show profile
+  target: async () => {
+    const anyFlag = flags.name || flags.url || flags.keywords || flags.audience;
+    if (!anyFlag) {
+      const d = loadDist();
+      const done = (d.launch || []).filter((l) => l.status === "done").length;
+      out({ product: d.product || null, opportunities: (d.opportunities || []).length, launch_done: done, launch_total: (d.launch || []).length });
+      return;
+    }
+    if (!flags.name || flags.name === true || !flags.url || flags.url === true) {
+      die('usage: shipfast target --name "MyApp" --url https://myapp.com [--keywords "a|b|c"] [--audience "…"]');
+    }
+    let d = null;
+    if (fs.existsSync(DIST_PATH)) { try { d = JSON.parse(fs.readFileSync(DIST_PATH, "utf8")); } catch { d = null; } }
+    if (!d || typeof d !== "object") d = {};
+    d.product = d.product && typeof d.product === "object" ? d.product : {};
+    d.product.name = str(flags.name);
+    d.product.url = str(flags.url);
+    if (flags.keywords && flags.keywords !== true) d.product.keywords = str(flags.keywords).split("|").map((s) => s.trim()).filter(Boolean);
+    else d.product.keywords = d.product.keywords || [];
+    if (flags.audience && flags.audience !== true) d.product.audience = str(flags.audience);
+    else d.product.audience = d.product.audience || null;
+    d.opportunities = d.opportunities || [];
+    d.links = d.links || [];
+    if (!Array.isArray(d.launch) || !d.launch.length) {
+      d.launch = DIRECTORIES.map((x) => ({ slug: x.slug, name: x.name, submit: x.submit, pricing: x.pricing, dofollow: x.dofollow, status: "todo", submission_url: null }));
+    }
+    saveDist(d);
+    const done = d.launch.filter((l) => l.status === "done").length;
+    out({ product: d.product, opportunities: d.opportunities.length, launch_done: done, launch_total: d.launch.length });
+  },
+
+  // found --url https://… --title "…" --channel reddit [--note "…"]
+  found: async () => {
+    if (!flags.url || flags.url === true || !flags.title || flags.title === true || !flags.channel || flags.channel === true) {
+      die('usage: shipfast found --url https://… --title "…" --channel reddit [--note "…"]');
+    }
+    const d = loadDist();
+    d.opportunities = d.opportunities || [];
+    const key = normUrl(flags.url);
+    const dupe = d.opportunities.find((o) => normUrl(o.url) === key);
+    if (dupe) { out({ duplicate: true, id: dupe.id, status: dupe.status }); return; }
+    const id = d.opportunities.reduce((m, o) => Math.max(m, o.id || 0), 0) + 1;
+    d.opportunities.push({
+      id, url: str(flags.url), title: str(flags.title), channel: str(flags.channel),
+      status: "new", found_at: new Date().toISOString(), reply_link: null,
+      note: flags.note && flags.note !== true ? str(flags.note) : null, skip_reason: null,
+    });
+    saveDist(d);
+    out({ id, status: "new", total_new: d.opportunities.filter((o) => o.status === "new").length });
+  },
+
+  // opps [--status new|replied|skipped]
+  opps: async () => {
+    const d = loadDist();
+    let items = d.opportunities || [];
+    if (flags.status && flags.status !== true) items = items.filter((o) => o.status === flags.status);
+    out(items.map((o) => ({ id: o.id, status: o.status, channel: o.channel, title: o.title, url: o.url, found_at: o.found_at, reply_link: o.reply_link })));
+  },
+
+  // replied <id> --link <permalink>
+  replied: async () => {
+    const id = Number(positional[0]);
+    if (positional[0] === undefined || !Number.isFinite(id)) die("usage: shipfast replied <id> --link <permalink>");
+    if (!flags.link || flags.link === true) die("usage: shipfast replied <id> --link <permalink>");
+    const d = loadDist();
+    const o = (d.opportunities || []).find((x) => x.id === id);
+    if (!o) die(`no opportunity with id ${id} — see \`shipfast opps\``);
+    o.status = "replied";
+    o.reply_link = str(flags.link);
+    saveDist(d);
+    out({ id, status: "replied", reply_link: o.reply_link });
+  },
+
+  // skip <id> [--reason "…"]
+  skip: async () => {
+    const id = Number(positional[0]);
+    if (positional[0] === undefined || !Number.isFinite(id)) die('usage: shipfast skip <id> [--reason "…"]');
+    const d = loadDist();
+    const o = (d.opportunities || []).find((x) => x.id === id);
+    if (!o) die(`no opportunity with id ${id} — see \`shipfast opps\``);
+    o.status = "skipped";
+    o.skip_reason = flags.reason && flags.reason !== true ? str(flags.reason) : null;
+    saveDist(d);
+    out({ id, status: "skipped", skip_reason: o.skip_reason });
+  },
+
+  // plan [--done <slug> --url <submission>]
+  plan: async () => {
+    const d = loadDist();
+    d.launch = d.launch || [];
+    if (flags.done && flags.done !== true) {
+      const entry = d.launch.find((l) => l.slug === flags.done);
+      if (!entry) die(`unknown directory slug "${flags.done}" — see \`shipfast plan\``);
+      entry.status = "done";
+      if (flags.url && flags.url !== true) entry.submission_url = str(flags.url);
+      saveDist(d);
+      out({ slug: entry.slug, status: "done", submission_url: entry.submission_url });
+      return;
+    }
+    const done = d.launch.filter((l) => l.status === "done").length;
+    const todo = d.launch.length - done;
+    say(`Launch directories — ${done} done / ${todo} todo`);
+    for (const l of d.launch) say(`  ${l.status === "done" ? "✓" : "○"} ${l.name}${l.submission_url ? ` → ${l.submission_url}` : ""}`);
+    out({ done, todo, directories: d.launch.map((l) => ({ slug: l.slug, name: l.name, submit: l.submit, pricing: l.pricing, dofollow: l.dofollow, status: l.status, submission_url: l.submission_url })) });
+  },
+
+  // link --channel <slug> [--to <url>]  (defaults to product.url; idempotent per channel)
+  link: async () => {
+    if (!flags.channel || flags.channel === true) die("usage: shipfast link --channel <slug> [--to <url>]");
+    const d = loadDist();
+    d.links = d.links || [];
+    const channel = str(flags.channel);
+    const existing = d.links.find((l) => l.channel === channel);
+    if (existing) { out({ channel, url: existing.url, existing: true }); return; }
+    const base = flags.to && flags.to !== true ? str(flags.to) : (d.product && d.product.url);
+    if (!base) die("no --to url and no product.url set — run `shipfast target --url …` first");
+    let url;
+    try {
+      const u = new URL(base);
+      u.searchParams.set("utm_source", channel);
+      u.searchParams.set("utm_medium", "agent-scout");
+      u.searchParams.set("utm_campaign", slugify(d.product && d.product.name));
+      url = u.toString();
+    } catch { die(`invalid url "${base}"`); }
+    d.links.push({ channel, url });
+    saveDist(d);
+    out({ channel, url });
+  },
+
+  // report — full distribution snapshot
+  report: async () => {
+    const d = loadDist();
+    const opps = d.opportunities || [];
+    const count = (s) => opps.filter((o) => o.status === s).length;
+    const byChannel = {};
+    for (const o of opps) byChannel[o.channel] = (byChannel[o.channel] || 0) + 1;
+    const launch = d.launch || [];
+    const launchDone = launch.filter((l) => l.status === "done").length;
+    const times = opps.map((o) => o.found_at).filter(Boolean).sort();
+    const r = {
+      product: (d.product && d.product.name) || null,
+      opportunities: { new: count("new"), replied: count("replied"), skipped: count("skipped"), by_channel: byChannel },
+      launch: { done: launchDone, todo: launch.length - launchDone },
+      links: (d.links || []).length,
+      last_activity: times.length ? times[times.length - 1] : null,
+    };
+    say(`📊 ${r.product || "(no product)"} — opps ${r.opportunities.new} new / ${r.opportunities.replied} replied / ${r.opportunities.skipped} skipped · launch ${r.launch.done}/${launch.length} · ${r.links} links`);
+    out(r);
+  },
+
   help: async () => { banner(); say(HELP_TEXT); },
 };
 delete commands.DEFAULT_EVENTS;
@@ -558,6 +744,16 @@ Grow:
   portal [--headline "…"]          Self-serve customer portal (cancel, card, invoices)
   hook --url https://yourapp.com/api/stripe [--events a,b,c]
   listen --forward localhost:3000/api/stripe
+
+Distribute:
+  target --name "MyApp" --url https://myapp.com   [--keywords "a|b|c"] [--audience "…"]  (no flags → show profile)
+  found --url https://… --title "…" --channel reddit   [--note "…"]
+  opps [--status new|replied|skipped]
+  replied <id> --link <permalink>
+  skip <id> [--reason "…"]
+  plan [--done <slug> --url <submission>]
+  link --channel <slug> [--to <url>]
+  report                           Distribution snapshot (opps, launch, links)
 
 Inspect:
   list products|prices|links|customers|subscriptions

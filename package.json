@@ -1,6 +1,6 @@
 {
   "name": "agent-ship-fast",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Ship a SaaS on Stripe in minutes, driven by your AI agent — products, prices, checkout links, customer portal, coupons, webhooks. Pure CLI, no embedded LLM (postiz model).",
   "license": "MIT",
   "type": "module",
